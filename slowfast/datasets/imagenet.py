@@ -12,12 +12,13 @@ from torchvision import transforms as transforms_tv
 
 import slowfast.datasets.transform as transform
 import slowfast.utils.logging as logging
+from slowfast.models.utils import calc_mvit_feature_geometry
 
 # import cv2
 from slowfast.utils.env import pathmgr
 
 from .build import DATASET_REGISTRY
-from .transform import transforms_imagenet_train
+from .transform import MaskingGenerator, transforms_imagenet_train
 
 logger = logging.get_logger(__name__)
 
@@ -41,6 +42,9 @@ class Imagenet(torch.utils.data.Dataset):
             self._construct_imdb()
         else:
             self._load_imdb()
+        self.num_videos = len(self._imdb)
+        self.feat_size, self.feat_stride = calc_mvit_feature_geometry(cfg)
+        self.dummy_output = None
 
     def _load_imdb(self):
         split_path = os.path.join(
@@ -116,8 +120,6 @@ class Imagenet(torch.utils.data.Dataset):
         im = transform.color_normalization(
             im, self.cfg.DATA.MEAN, self.cfg.DATA.STD
         )
-        # Convert HWC/RGB/float to CHW/BGR/float format
-        # im = np.ascontiguousarray(im[:, :, ::-1].transpose([2, 0, 1]))
         return im
 
     def _prepare_im_tf(self, im_path):
@@ -144,13 +146,22 @@ class Imagenet(torch.utils.data.Dataset):
             )
         else:
             t = []
-            size = int((256 / 224) * test_size)
-            t.append(
-                transforms_tv.Resize(
-                    size, interpolation=3
-                ),  # to maintain same ratio w.r.t. 224 images
-            )
-            t.append(transforms_tv.CenterCrop(test_size))
+            if self.cfg.DATA.IN_VAL_CROP_RATIO == 0.0:
+                t.append(
+                    transforms_tv.Resize((test_size, test_size),
+                    interpolation=transforms_tv.InterpolationMode.BICUBIC),
+                )
+            else:
+                size = int(
+                    (1.0 / self.cfg.DATA.IN_VAL_CROP_RATIO) * test_size
+                )  # = 1/0.875 * test_size
+                t.append(
+                    transforms_tv.Resize(
+                        size,
+                        interpolation=transforms_tv.InterpolationMode.BICUBIC
+                    ),  # to maintain same ratio w.r.t. 224 images
+                )
+                t.append(transforms_tv.CenterCrop(test_size))
             t.append(transforms_tv.ToTensor())
             t.append(
                 transforms_tv.Normalize(self.cfg.DATA.MEAN, self.cfg.DATA.STD)
@@ -159,13 +170,59 @@ class Imagenet(torch.utils.data.Dataset):
         im = aug_transform(im)
         return im
 
+    def _prepare_im_masked(self, im_path):
+        with pathmgr.open(im_path, "rb") as f:
+            with Image.open(f) as im:
+                im = im.convert("RGB")
+
+        if self.mode in ["train", "val"]:
+
+            depth = self.cfg.MASK.PRETRAIN_DEPTH[-1]
+            assert depth == max(self.cfg.MASK.PRETRAIN_DEPTH)
+            max_mask = self.cfg.AUG.MAX_MASK_PATCHES_PER_BLOCK
+            # use feat geometry for determining num masks
+            mask_window_size = self.feat_size[depth][-1]
+            num_mask = round(
+                self.feat_size[depth][-1]
+                * self.feat_size[depth][-2]
+                * self.cfg.AUG.MASK_RATIO
+            )
+            min_mask = num_mask // 5
+
+            train_size = self.cfg.DATA.TRAIN_CROP_SIZE
+            mask_generator = MaskingGenerator(
+                mask_window_size,
+                num_masking_patches=num_mask,
+                max_num_patches=max_mask,
+                min_num_patches=min_mask,
+            )
+            aug_transform = transforms_imagenet_train(
+                img_size=(train_size, train_size),
+                scale=self.cfg.DATA.TRAIN_JITTER_SCALES_RELATIVE,
+                ratio=self.cfg.DATA.TRAIN_JITTER_ASPECT_RELATIVE,
+                interpolation=self.cfg.AUG.INTERPOLATION,
+                color_jitter=self.cfg.AUG.COLOR_JITTER,
+                auto_augment=self.cfg.AUG.AA_TYPE,
+                re_prob=0.0,
+                mean=self.cfg.DATA.MEAN,
+                std=self.cfg.DATA.STD,
+            )
+            im = aug_transform(im)
+            mask = mask_generator()
+            return [im, torch.Tensor(), mask]
+        else:
+            raise NotImplementedError
+        return aug_transform(im)
+
     def __load__(self, index):
         try:
             # Load the image
             im_path = self._imdb[index]["im_path"]
             # Prepare the image for training / testing
             if self.cfg.AUG.ENABLE:
-                if self.mode == "train" and self.cfg.AUG.NUM_SAMPLE > 1:
+                if self.cfg.AUG.GEN_MASK_LOADER:
+                    return self._prepare_im_masked(im_path)
+                elif self.mode == "train" and self.cfg.AUG.NUM_SAMPLE > 1:
                     im = []
                     for _ in range(self.cfg.AUG.NUM_SAMPLE):
                         crop = self._prepare_im_tf(im_path)
@@ -181,23 +238,37 @@ class Imagenet(torch.utils.data.Dataset):
             return None
 
     def __getitem__(self, index):
+        if self.dummy_output is not None:
+            return self.dummy_output
         # if the current image is corrupted, load a different image.
         for _ in range(self.num_retries):
             im = self.__load__(index)
             # Data corrupted, retry with a different image.
             if im is None:
+                assert self.mode == "train", f"{index} failed loading"
+                print(f"{index} failed. retry")
                 index = random.randint(0, len(self._imdb) - 1)
             else:
                 break
         # Retrieve the label
         label = self._imdb[index]["class"]
         if isinstance(im, list):
-            label = [label for _ in range(len(im))]
-            dummy = [torch.Tensor() for _ in range(len(im))]
-            return im, label, dummy, {}
+            if self.cfg.AUG.GEN_MASK_LOADER:
+                dummy = torch.Tensor()
+                label = torch.Tensor()
+            else:
+                label = [label for _ in range(len(im))]
+                dummy = [torch.Tensor() for _ in range(len(im))]
+            if self.cfg.DATA.DUMMY_LOAD:
+                if self.dummy_output is None:
+                    self.dummy_output = (im, label, index, dummy, {})
+            return im, label, index, dummy, {}
         else:
             dummy = torch.Tensor()
-            return [im], label, dummy, {}
+            if self.cfg.DATA.DUMMY_LOAD:
+                if self.dummy_output is None:
+                    self.dummy_output = ([im], label, index, dummy, {})
+            return [im], label, index, dummy, {}
 
     def __len__(self):
         return len(self._imdb)

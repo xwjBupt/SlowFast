@@ -56,7 +56,7 @@ def setup_logging(output_dir=None):
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
     plain_formatter = logging.Formatter(
-        "[%(asctime)s][%(levelname)s] %(filename)s: %(lineno)3d: %(message)s",
+        "[%(asctime)s][%(levelname)s] %(filename)s: %(lineno)4d: %(message)s",
         datefmt="%m/%d %H:%M:%S",
     )
 
@@ -84,7 +84,7 @@ def get_logger(name):
     return logging.getLogger(name)
 
 
-def log_json_stats(stats):
+def log_json_stats(stats, output_dir=None):
     """
     Logs json stats.
     Args:
@@ -97,3 +97,14 @@ def log_json_stats(stats):
     json_stats = simplejson.dumps(stats, sort_keys=True, use_decimal=True)
     logger = get_logger(__name__)
     logger.info("json_stats: {:s}".format(json_stats))
+    if du.is_master_proc(du.get_world_size()) and output_dir:
+        filename = os.path.join(output_dir, "json_stats.log")
+        try:
+            with pathmgr.open(
+                filename, "a", buffering=1024 if "://" in filename else -1
+            ) as f:
+                f.write("json_stats: {:s}\n".format(json_stats))
+        except Exception:
+            logger.info(
+                "Failed to write to json_stats.log: {}".format(json_stats)
+            )

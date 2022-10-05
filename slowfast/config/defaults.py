@@ -2,6 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 """Configs."""
+import math
 from fvcore.common.config import CfgNode
 
 from . import custom_config
@@ -10,6 +11,82 @@ from . import custom_config
 # Config definition
 # -----------------------------------------------------------------------------
 _C = CfgNode()
+
+# -----------------------------------------------------------------------------
+# Contrastive Model (for MoCo, SimCLR, SwAV, BYOL)
+# -----------------------------------------------------------------------------
+
+_C.CONTRASTIVE = CfgNode()
+
+# temperature used for contrastive losses
+_C.CONTRASTIVE.T = 0.07
+
+# output dimension for the loss
+_C.CONTRASTIVE.DIM = 128
+
+# number of training samples (for kNN bank)
+_C.CONTRASTIVE.LENGTH = 239975
+
+# the length of MoCo's and MemBanks' queues
+_C.CONTRASTIVE.QUEUE_LEN = 65536
+
+# momentum for momentum encoder updates
+_C.CONTRASTIVE.MOMENTUM = 0.5
+
+# wether to anneal momentum to value above with cosine schedule
+_C.CONTRASTIVE.MOMENTUM_ANNEALING = False
+
+# either memorybank, moco, simclr, byol, swav
+_C.CONTRASTIVE.TYPE = "mem"
+
+# wether to interpolate memorybank in time
+_C.CONTRASTIVE.INTERP_MEMORY = False
+
+# 1d or 2d (+temporal) memory
+_C.CONTRASTIVE.MEM_TYPE = "1d"
+
+# number of classes for online kNN evaluation
+_C.CONTRASTIVE.NUM_CLASSES_DOWNSTREAM = 400
+
+# use an MLP projection with these num layers
+_C.CONTRASTIVE.NUM_MLP_LAYERS = 1
+
+# dimension of projection and predictor MLPs
+_C.CONTRASTIVE.MLP_DIM = 2048
+
+# use BN in projection/prediction MLP
+_C.CONTRASTIVE.BN_MLP = False
+
+# use synchronized BN in projection/prediction MLP
+_C.CONTRASTIVE.BN_SYNC_MLP = False
+
+# shuffle BN only locally vs. across machines
+_C.CONTRASTIVE.LOCAL_SHUFFLE_BN = True
+
+# Wether to fill multiple clips (or just the first) into queue
+_C.CONTRASTIVE.MOCO_MULTI_VIEW_QUEUE = False
+
+# if sampling multiple clips per vid they need to be at least min frames apart
+_C.CONTRASTIVE.DELTA_CLIPS_MIN = -math.inf
+
+# if sampling multiple clips per vid they can be max frames apart
+_C.CONTRASTIVE.DELTA_CLIPS_MAX = math.inf
+
+# if non empty, use predictors with depth specified
+_C.CONTRASTIVE.PREDICTOR_DEPTHS = []
+
+# Wether to sequentially process multiple clips (=lower mem usage) or batch them
+_C.CONTRASTIVE.SEQUENTIAL = False
+
+# Wether to perform SimCLR loss across machines (or only locally)
+_C.CONTRASTIVE.SIMCLR_DIST_ON = True
+
+# Length of queue used in SwAV
+_C.CONTRASTIVE.SWAV_QEUE_LEN = 0
+
+# Wether to run online kNN evaluation during training
+_C.CONTRASTIVE.KNN_ON = True
+
 
 # ---------------------------------------------------------------------------- #
 # Batch norm options
@@ -32,10 +109,19 @@ _C.BN.NORM_TYPE = "batchnorm"
 # NUM_SPLITS splits, and run BN on each of them separately independently.
 _C.BN.NUM_SPLITS = 1
 
-# Parameter for NaiveSyncBatchNorm3d, where the stats across `NUM_SYNC_DEVICES`
-# devices will be synchronized.
+# Parameter for NaiveSyncBatchNorm, where the stats across `NUM_SYNC_DEVICES`
+# devices will be synchronized. `NUM_SYNC_DEVICES` cannot be larger than number of
+# devices per machine; if global sync is desired, set `GLOBAL_SYNC`.
+# By default ONLY applies to NaiveSyncBatchNorm3d; consider also setting
+# CONTRASTIVE.BN_SYNC_MLP if appropriate.
 _C.BN.NUM_SYNC_DEVICES = 1
 
+# Parameter for NaiveSyncBatchNorm. Setting `GLOBAL_SYNC` to True synchronizes
+# stats across all devices, across all machines; in this case, `NUM_SYNC_DEVICES`
+# must be set to None.
+# By default ONLY applies to NaiveSyncBatchNorm3d; consider also setting
+# CONTRASTIVE.BN_SYNC_MLP if appropriate.
+_C.BN.GLOBAL_SYNC = False
 
 # ---------------------------------------------------------------------------- #
 # Training options.
@@ -44,6 +130,10 @@ _C.TRAIN = CfgNode()
 
 # If True Train the model, else skip training.
 _C.TRAIN.ENABLE = True
+
+# Kill training if loss explodes over this ratio from the previous 5 measurements.
+# Only enforced if > 0.0
+_C.TRAIN.KILL_LOSS_EXPLOSION_FACTOR = 0.0
 
 # Dataset.
 _C.TRAIN.DATASET = "kinetics"
@@ -78,6 +168,9 @@ _C.TRAIN.CHECKPOINT_CLEAR_NAME_PATTERN = ()  # ("backbone.",)
 # If True, use FP16 for activations
 _C.TRAIN.MIXED_PRECISION = False
 
+# if True, inflate some params from imagenet model.
+_C.TRAIN.CHECKPOINT_IN_INIT = False
+
 # ---------------------------------------------------------------------------- #
 # Augmentation options.
 # ---------------------------------------------------------------------------- #
@@ -111,6 +204,32 @@ _C.AUG.RE_COUNT = 1
 
 # Do not random erase first (clean) augmentation split.
 _C.AUG.RE_SPLIT = False
+
+# Whether to generate input mask during image processing.
+_C.AUG.GEN_MASK_LOADER = False
+
+# If True, masking mode is "tube". Default is "cube".
+_C.AUG.MASK_TUBE = False
+
+# If True, masking mode is "frame". Default is "cube".
+_C.AUG.MASK_FRAMES = False
+
+# The size of generated masks.
+_C.AUG.MASK_WINDOW_SIZE = [8, 7, 7]
+
+# The ratio of masked tokens out of all tokens. Also applies to MViT supervised training
+_C.AUG.MASK_RATIO = 0.0
+
+# The maximum number of a masked block. None means no maximum limit. (Used only in image MaskFeat.)
+_C.AUG.MAX_MASK_PATCHES_PER_BLOCK = None
+
+# ---------------------------------------------------------------------------- #
+# Masked pretraining visualization options.
+# ---------------------------------------------------------------------------- #
+_C.VIS_MASK = CfgNode()
+
+# Whether to do visualization.
+_C.VIS_MASK.ENABLE = False
 
 # ---------------------------------------------------------------------------- #
 # MipUp options.
@@ -164,6 +283,8 @@ _C.TEST.NUM_SPATIAL_CROPS = 3
 _C.TEST.CHECKPOINT_TYPE = "pytorch"
 # Path to saving prediction results file.
 _C.TEST.SAVE_RESULTS_PATH = ""
+
+_C.TEST.NUM_TEMPORAL_CLIPS = []
 # -----------------------------------------------------------------------------
 # ResNet options
 # -----------------------------------------------------------------------------
@@ -186,6 +307,9 @@ _C.RESNET.STRIDE_1X1 = False
 
 #  If true, initialize the gamma of the final BN of each block to zero.
 _C.RESNET.ZERO_INIT_FINAL_BN = False
+
+#  If true, initialize the final conv layer of each block to zero.
+_C.RESNET.ZERO_INIT_FINAL_CONV = False
 
 # Number of weight layers.
 _C.RESNET.DEPTH = 50
@@ -276,7 +400,15 @@ _C.MODEL.NUM_CLASSES = 400
 _C.MODEL.LOSS_FUNC = "cross_entropy"
 
 # Model architectures that has one single pathway.
-_C.MODEL.SINGLE_PATHWAY_ARCH = ["2d", "c2d", "i3d", "slow", "x3d", "mvit"]
+_C.MODEL.SINGLE_PATHWAY_ARCH = [
+    "2d",
+    "c2d",
+    "i3d",
+    "slow",
+    "x3d",
+    "mvit",
+    "maskmvit",
+]
 
 # Model architectures that has multiple pathways.
 _C.MODEL.MULTI_PATHWAY_ARCH = ["slowfast"]
@@ -295,6 +427,16 @@ _C.MODEL.HEAD_ACT = "softmax"
 
 # Activation checkpointing enabled or not to save GPU memory.
 _C.MODEL.ACT_CHECKPOINT = False
+
+# If True, detach the final fc layer from the network, by doing so, only the
+# final fc layer will be trained.
+_C.MODEL.DETACH_FINAL_FC = False
+
+# If True, frozen batch norm stats during training.
+_C.MODEL.FROZEN_BN = False
+
+# If True, AllReduce gradients are compressed to fp16
+_C.MODEL.FP16_ALLREDUCE = False
 
 
 # -----------------------------------------------------------------------------
@@ -338,6 +480,9 @@ _C.MVIT.QKV_BIAS = True
 # Drop path rate for the tranfomer.
 _C.MVIT.DROPPATH_RATE = 0.1
 
+# The initial value of layer scale gamma. Set 0.0 to disable layer scale.
+_C.MVIT.LAYER_SCALE_INIT_VALUE = 0.0
+
 # Depth of the transformer.
 _C.MVIT.DEPTH = 16
 
@@ -354,7 +499,7 @@ _C.MVIT.HEAD_MUL = []
 
 # Stride size for the Pool KV at layer i.
 # Format: [[i, stride_t_i, stride_h_i, stride_w_i], ...,]
-_C.MVIT.POOL_KV_STRIDE = None
+_C.MVIT.POOL_KV_STRIDE = []
 
 # Initial stride size for KV at layer 1. The stride size will be further reduced with
 # the raio of MVIT.DIM_MUL. If will overwrite MVIT.POOL_KV_STRIDE if not None.
@@ -380,6 +525,105 @@ _C.MVIT.SEP_POS_EMBED = False
 # Dropout rate for the MViT backbone.
 _C.MVIT.DROPOUT_RATE = 0.0
 
+# If True, use absolute positional embedding.
+_C.MVIT.USE_ABS_POS = True
+
+# If True, use relative positional embedding for spatial dimentions
+_C.MVIT.REL_POS_SPATIAL = False
+
+# If True, use relative positional embedding for temporal dimentions
+_C.MVIT.REL_POS_TEMPORAL = False
+
+# If True, init rel with zero
+_C.MVIT.REL_POS_ZERO_INIT = False
+
+# If True, using Residual Pooling connection
+_C.MVIT.RESIDUAL_POOLING = False
+
+# Dim mul in qkv linear layers of attention block instead of MLP
+_C.MVIT.DIM_MUL_IN_ATT = False
+
+# If True, using separate linear layers for Q, K, V in attention blocks.
+_C.MVIT.SEPARATE_QKV = False
+
+# The initialization scale factor for the head parameters.
+_C.MVIT.HEAD_INIT_SCALE = 1.0
+
+# Whether to use the mean pooling of all patch tokens as the output.
+_C.MVIT.USE_MEAN_POOLING = False
+
+# If True, use frozen sin cos positional embedding.
+_C.MVIT.USE_FIXED_SINCOS_POS = False
+
+# -----------------------------------------------------------------------------
+# Masked pretraining options
+# -----------------------------------------------------------------------------
+_C.MASK = CfgNode()
+
+# Whether to enable Masked style pretraining.
+_C.MASK.ENABLE = False
+
+# Whether to enable MAE (discard encoder tokens).
+_C.MASK.MAE_ON = False
+
+# Whether to enable random masking in mae
+_C.MASK.MAE_RND_MASK = False
+
+# Whether to do random masking per-frame in mae
+_C.MASK.PER_FRAME_MASKING = False
+
+# only predict loss on temporal strided patches, or predict full time extent
+_C.MASK.TIME_STRIDE_LOSS = True
+
+# Whether to normalize the pred pixel loss
+_C.MASK.NORM_PRED_PIXEL = True
+
+# Whether to fix initialization with inverse depth of layer for pretraining.
+_C.MASK.SCALE_INIT_BY_DEPTH = False
+
+# Base embedding dimension for the decoder transformer.
+_C.MASK.DECODER_EMBED_DIM = 512
+
+# Base embedding dimension for the decoder transformer.
+_C.MASK.DECODER_SEP_POS_EMBED = False
+
+# Use a KV kernel in decoder?
+_C.MASK.DEC_KV_KERNEL = []
+
+# Use a KV stride in decoder?
+_C.MASK.DEC_KV_STRIDE = []
+
+# The depths of features which are inputs of the prediction head.
+_C.MASK.PRETRAIN_DEPTH = [15]
+
+# The type of Masked pretraining prediction head.
+# Can be "separate", "separate_xformer".
+_C.MASK.HEAD_TYPE = "separate"
+
+# The depth of MAE's decoder
+_C.MASK.DECODER_DEPTH = 0
+
+# The weight of HOG target loss.
+_C.MASK.PRED_HOG = False
+# Reversible Configs
+_C.MVIT.REV = CfgNode()
+
+# Enable Reversible Model
+_C.MVIT.REV.ENABLE = False
+
+# Method to fuse the reversible paths
+# see :class: `TwoStreamFusion` for all the options
+_C.MVIT.REV.RESPATH_FUSE = "concat"
+
+# Layers to buffer activations at
+# (at least Q-pooling layers needed)
+_C.MVIT.REV.BUFFER_LAYERS = []
+
+# 'conv' or 'max' operator for the respath in Qpooling
+_C.MVIT.REV.RES_PATH = "conv"
+
+# Method to merge hidden states before Qpoolinglayers
+_C.MVIT.REV.PRE_Q_FUSION = "avg"
 
 # -----------------------------------------------------------------------------
 # SlowFast options
@@ -473,8 +717,14 @@ _C.DATA.TEST_CROP_SIZE = 256
 # frame sampling.
 _C.DATA.TARGET_FPS = 30
 
+# JITTER TARGET_FPS by +- this number randomly
+_C.DATA.TRAIN_JITTER_FPS = 0.0
+
 # Decoding backend, options include `pyav` or `torchvision`
-_C.DATA.DECODING_BACKEND = "pyav"
+_C.DATA.DECODING_BACKEND = "torchvision"
+
+# Decoding resize to short size (set to native size for best speed)
+_C.DATA.DECODING_SHORT_SIZE = 256
 
 # if True, sample uniformly in [1 / max_scale, 1 / min_scale] and take a
 # reciprocal to get the scale. If False, take a uniform sample from
@@ -493,6 +743,63 @@ _C.DATA.ENSEMBLE_METHOD = "sum"
 # If True, revert the default input channel (RBG <-> BGR).
 _C.DATA.REVERSE_INPUT_CHANNEL = False
 
+# how many samples (=clips) to decode from a single video
+_C.DATA.TRAIN_CROP_NUM_TEMPORAL = 1
+
+# how many spatial samples to crop from a single clip
+_C.DATA.TRAIN_CROP_NUM_SPATIAL = 1
+
+# color random percentage for grayscale conversion
+_C.DATA.COLOR_RND_GRAYSCALE = 0.0
+
+# loader can read .csv file in chunks of this chunk size
+_C.DATA.LOADER_CHUNK_SIZE = 0
+
+# if LOADER_CHUNK_SIZE > 0, define overall length of .csv file
+_C.DATA.LOADER_CHUNK_OVERALL_SIZE = 0
+
+# for chunked reading, dataloader can skip rows in (large)
+# training csv file
+_C.DATA.SKIP_ROWS = 0
+
+# The separator used between path and label.
+_C.DATA.PATH_LABEL_SEPARATOR = " "
+
+# augmentation probability to convert raw decoded video to
+# grayscale temporal difference
+_C.DATA.TIME_DIFF_PROB = 0.0
+
+# Apply SSL-based SimCLR / MoCo v1/v2 color augmentations,
+#  with params below
+_C.DATA.SSL_COLOR_JITTER = False
+
+# color jitter percentage for brightness, contrast, saturation
+_C.DATA.SSL_COLOR_BRI_CON_SAT = [0.4, 0.4, 0.4]
+
+# color jitter percentage for hue
+_C.DATA.SSL_COLOR_HUE = 0.1
+
+# SimCLR / MoCo v2 augmentations on/off
+_C.DATA.SSL_MOCOV2_AUG = False
+
+# SimCLR / MoCo v2 blur augmentation minimum gaussian sigma
+_C.DATA.SSL_BLUR_SIGMA_MIN = [0.0, 0.1]
+
+# SimCLR / MoCo v2 blur augmentation maximum gaussian sigma
+_C.DATA.SSL_BLUR_SIGMA_MAX = [0.0, 2.0]
+
+
+# If combine train/val split as training for in21k
+_C.DATA.IN22K_TRAINVAL = False
+
+# If not None, use IN1k as val split when training in21k
+_C.DATA.IN22k_VAL_IN1K = ""
+
+# Large resolution models may use different crop ratios
+_C.DATA.IN_VAL_CROP_RATIO = 0.875 # 224/256 = 0.875
+
+# don't use real video for kinetics.py
+_C.DATA.DUMMY_LOAD = False
 
 # ---------------------------------------------------------------------------- #
 # Optimizer options
@@ -561,9 +868,21 @@ _C.SOLVER.CLIP_GRAD_VAL = None
 
 # Clip gradient at this norm before optimizer update
 _C.SOLVER.CLIP_GRAD_L2NORM = None
+
+# LARS optimizer
+_C.SOLVER.LARS_ON = False
+
+# The layer-wise decay of learning rate. Set to 1. to disable.
+_C.SOLVER.LAYER_DECAY = 1.0
+
+# Adam's beta
+_C.SOLVER.BETAS = (0.9, 0.999)
 # ---------------------------------------------------------------------------- #
 # Misc options
 # ---------------------------------------------------------------------------- #
+
+# The name of the current task; e.g. "ssl"/"sl" for (self)supervised learning
+_C.TASK = ""
 
 # Number of GPUs to use (applies to both training and testing).
 _C.NUM_GPUS = 1
@@ -575,7 +894,7 @@ _C.NUM_SHARDS = 1
 _C.SHARD_ID = 0
 
 # Output basedir.
-_C.OUTPUT_DIR = "./tmp"
+_C.OUTPUT_DIR = "."
 
 # Note that non-determinism may still be present due to non-deterministic
 # operator implementations in GPU operator libraries.
@@ -717,13 +1036,13 @@ _C.MULTIGRID.EPOCH_FACTOR = 1.5
 # Enable short cycles.
 _C.MULTIGRID.SHORT_CYCLE = False
 # Short cycle additional spatial dimensions relative to the default crop size.
-_C.MULTIGRID.SHORT_CYCLE_FACTORS = [0.5, 0.5 ** 0.5]
+_C.MULTIGRID.SHORT_CYCLE_FACTORS = [0.5, 0.5**0.5]
 
 _C.MULTIGRID.LONG_CYCLE = False
 # (Temporal, Spatial) dimensions relative to the default shape.
 _C.MULTIGRID.LONG_CYCLE_FACTORS = [
-    (0.25, 0.5 ** 0.5),
-    (0.5, 0.5 ** 0.5),
+    (0.25, 0.5**0.5),
+    (0.5, 0.5**0.5),
     (0.5, 1),
     (1, 1),
 ]

@@ -79,6 +79,7 @@ MODEL:
   LOSS_FUNC: soft_cross_entropy
   DROPOUT_RATE: 0.5
 TEST:
+
   ENABLE: True
   DATASET: kinetics
   BATCH_SIZE: 64
